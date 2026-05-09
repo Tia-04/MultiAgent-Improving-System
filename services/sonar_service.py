@@ -151,6 +151,51 @@ class SonarService:
             raise last_error
         return {}
 
+    def get_file_metrics(
+        self,
+        component: str | None = None,
+        metric_keys: list[str] | None = None,
+        retries: int = 3,
+        retry_delay: int = 1,
+    ) -> dict[str, dict]:
+        """Fetch selected Sonar measures for each file in one component."""
+        component = component or self.project_key
+        metric_keys = metric_keys or ["bugs", "code_smells", "complexity", "cognitive_complexity"]
+        url = f"{self.api}/measures/component_tree"
+        params = {
+            "component": component,
+            "qualifiers": "FIL",
+            "metricKeys": ",".join(metric_keys),
+            "ps": 500,
+        }
+        last_error = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                resp = requests.get(url, params=params, auth=(self.token, ""), timeout=15)
+                resp.raise_for_status()
+                components = resp.json().get("components", [])
+                if components:
+                    result = {}
+                    for item in components:
+                        path = str(item.get("path", "")).replace("\\", "/")
+                        if not path:
+                            continue
+                        result[path] = {
+                            measure["metric"]: measure.get("value", "0")
+                            for measure in item.get("measures", [])
+                        }
+                    return result
+            except requests.exceptions.RequestException as e:
+                last_error = e
+
+            if attempt < retries:
+                time.sleep(retry_delay)
+
+        if last_error:
+            raise last_error
+        return {}
+
     # ── Issues ────────────────────────────────────────────────────────────────
 
     def get_issues(
@@ -233,24 +278,6 @@ class SonarService:
                 issue_types=["CODE_SMELL"],
                 in_new_code_period=in_new_code_period,
             )
-        # TODO NOT THE BEST
-        if metric_name == "complexity":
-            smells = self.get_issues(
-                component=component,
-                issue_types=["CODE_SMELL"],
-                in_new_code_period=in_new_code_period,
-            )
-            # Sonar does not expose a dedicated "complexity issue type":
-            # keep complexity-related smells when possible.
-            focused = []
-            for i in smells:
-                text = " ".join(
-                    str(i.get(k, "")) for k in ("message", "rule", "cleanCodeAttribute")
-                ).lower()
-                if "complex" in text or "cognitive" in text:
-                    focused.append(i)
-            return focused or smells
-
         if metric_name == "cognitive_complexity":
             smells = self.get_issues(
                 component=component,

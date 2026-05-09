@@ -4,7 +4,6 @@ config/llm_client.py
 LLM client abstractions.
 
 CodexClient  - calls OpenAI's Responses API (codex-mini-latest / o4-mini etc.)
-OllamaClient - local Ollama fallback (original, kept for dev use)
 """
 
 import os
@@ -48,7 +47,7 @@ class CodexClient:
             model rejects that parameter.
         """
         # NOTE: temperature is kept in the method signature only for retrocompatibility with other clients (OllamaClient).
-      
+        # NOTE: TODO REMOVE temperature from signature and all callers once we have a unified client interface.
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type":  "application/json",
@@ -84,7 +83,7 @@ class CodexClient:
             }
         session = requests.Session()
         session.trust_env = False
-        resp = session.post(self.url, headers=headers, json=payload, timeout=600)
+        resp = session.post(self.url, headers=headers, json=payload, timeout=1000)
         try:
             resp.raise_for_status()
         except requests.HTTPError as exc:
@@ -167,36 +166,3 @@ class CodexClient:
             f"Payload snippet: {snippet}"
         )
 
-
-class OllamaClient:
-    """Local Ollama Client without API keys."""
-
-    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
-        self.model = model
-        self.url   = f"{base_url}/api/generate"
-    
-    def generate_response(
-        self,
-        prompt: str,
-        temperature: float = 0.2,
-        json_schema: dict | None = None,
-        system_prompt: str | None = None,
-    ) -> str:
-        """Generate plain text from local Ollama server (streaming mode)."""
-        full_prompt = prompt if not system_prompt else f"{system_prompt}\n\n{prompt}"
-        payload = {"model": self.model, "prompt": full_prompt, "stream": True,
-                   "options": {"temperature": temperature}}
-        try:
-            resp = requests.post(self.url, json=payload, stream=True, timeout=600)
-            resp.raise_for_status()
-            full = ""
-            for line in resp.iter_lines():
-                if line:
-                    chunk = json.loads(line.decode("utf-8"))
-                    tok = chunk.get("response", "")
-                    print(tok, end="", flush=True)
-                    full += tok
-            print()
-            return full
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Ollama connection error: {e}") from e

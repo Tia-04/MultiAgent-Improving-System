@@ -1,7 +1,7 @@
 """
 llm_agent/analyzer.py
 ---------------------
-AnalyzerAgent: turns compile/test/sonar signals into concise repair hints.
+AnalyzerAgent: turns single-file test and Sonar signals into concise repair hints.
 """
 
 import json
@@ -9,34 +9,37 @@ import json
 
 class AnalyzerAgent:
     SYSTEM_PROMPT = (
-        "You are an analyzer agent for Java iterations.\n"
-        "Return strict JSON matching the provided schema.\n"
-        "Keep guidance concise, concrete, and patch-oriented.\n"
+        "You analyze one Java file and return strict JSON only.\n"
+        "Keep suggestions minimal, concrete, and limited to the provided file.\n"
+        "Treat successful Java compilation as a hard requirement.\n"
         "Do not output code blocks."
     )
 
     DIAG_JSON_SCHEMA = {
-        "name": "diagnosis",
+        "name": "single_file_hints",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "failed_tests": {"type": "string"},
                 "root_cause": {"type": "string"},
                 "targeted_changes": {
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 1,
-                    "maxItems": 3,
+                    "maxItems": 4,
                 },
                 "check_after_fix": {
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 1,
-                    "maxItems": 3,
+                    "maxItems": 4,
                 },
             },
-            "required": ["failed_tests", "root_cause", "targeted_changes", "check_after_fix"],
+            "required": [
+                "root_cause",
+                "targeted_changes",
+                "check_after_fix",
+            ],
             "additionalProperties": False,
         },
     }
@@ -44,91 +47,85 @@ class AnalyzerAgent:
     def __init__(self, llm):
         self.llm = llm
 
-    def analyze_compile_errors(self, code: str, compile_errors: str) -> str:
-        return self._analyze(
-            context=(
-                "Context: Java compilation failed.\n"
-                f"ERRORS:\n{compile_errors}\n\n"
-                f"CODE:\n{code}\n"
-            ),
-            failed_default="compilation failed",
-        )
-
-    def analyze_test_failures(self, code: str, failures: list[str]) -> str:
-        failure_text = "\n".join(f"- {f}" for f in failures) or "(no details)"
-        return self._analyze(
-            context=(
-                "Context: JUnit tests failed.\n"
-                f"FAILED TESTS (expected vs actual):\n{failure_text}\n\n"
-                f"CODE:\n{code}\n"
-            ),
-            failed_default="tests failed",
-        )
-
-    def analyze_sonar(self, code: str, metrics: dict, issues: list) -> str:
-        key_metrics = {
-            k: metrics.get(k, "N/A")
-            for k in ("bugs", "code_smells", "complexity", "cognitive_complexity")
-        }
-        def _flow_summary(issue: dict) -> str:
-            flows = issue.get("flows") or []
-            points = []
-            for flow in flows[:3]:
-                for loc in (flow.get("locations") or [])[:1]:
-                    rng = loc.get("textRange") or {}
-                    line = rng.get("startLine", "?")
-                    delta = loc.get("msg", "?")
-                    points.append(f"L{line}:{delta}")
-            return ", ".join(points) if points else "no-flow-details"
-
-        top_issues = "; ".join(
+    def analyze_repo_sonar(self, context_file: dict, metrics: dict, issues: list) -> str:
+        key_metrics = {k: metrics.get(k, "N/A") for k in ("bugs", "code_smells", "cognitive_complexity")}
+        top_issues = "\n".join(
             (
-                f"line {i.get('line', '?')} "
-                f"[rule={i.get('rule', '?')}]: {i.get('message', '?')} "
-                f"| flows: {_flow_summary(i)}"
+                f"- line={i.get('line', '?')} rule={i.get('rule', '?')} message={i.get('message', '?')}"
             )
-            for i in issues[:3]
+            for i in issues[:5]
         ) or "none"
         return self._analyze(
             context=(
-                "Context: Sonar quality gate failed.\n"
+                "Context: Sonar quality did not meet the target and this file is being rewritten.\n"
                 f"METRICS: {key_metrics}\n"
-                f"ISSUES: {top_issues}\n\n"
-                f"CODE:\n{code}\n"
-            ),
-            failed_default="quality gate failed",
+                f"TOP ISSUES:\n{top_issues}\n\n"
+                f"FILE:\n{self._format_context_file(context_file)}\n"
+            )
         )
 
-    def _analyze(self, context: str, failed_default: str) -> str:
+    def analyze_compile_errors(self, context_file: dict, compile_errors: str) -> str:
+        return self._analyze(
+            context=(
+                "Context: Maven compilation failed after editing this file.\n"
+                f"COMPILE_ERRORS:\n{compile_errors}\n\n"
+                f"FILE:\n{self._format_context_file(context_file)}\n"
+            )
+        )
+
+    def analyze_test_failures(self, context_file: dict, test_output: str, baseline_failures: list[str]) -> str:
+        baseline_block = "\n".join(f"- {item}" for item in baseline_failures) or "none"
+        return self._analyze(
+            context=(
+                "Context: Tests got worse after editing this file.\n"
+                "Goal: restore the exact baseline failing-test set.\n"
+                f"BASELINE_FAILING_TESTS:\n{baseline_block}\n\n"
+                f"CURRENT_TEST_OUTPUT:\n{test_output}\n\n"
+                f"FILE:\n{self._format_context_file(context_file)}\n"
+            )
+        )
+
+    def _analyze(self, context: str) -> str:
         prompt = (
-            "Produce a diagnosis JSON with fields:\n"
-            "failed_tests, root_cause, targeted_changes, check_after_fix.\n"
+            "Return JSON with fields: root_cause, targeted_changes, check_after_fix.\n"
             "Rules:\n"
-            "- root_cause: 1-2 short sentences.\n"
-            "- targeted_changes: 1-3 short imperative actions.\n"
-            "- check_after_fix: 1-3 concrete validations.\n\n"
+            "- root_cause: 1-3 short sentences.\n"
+            "- targeted_changes: 1-4 short imperative actions for that file only.\n"
+            "- Make sure the proposed edit still compiles as valid Java.\n"
+            "- For each targeted change, include the exact method name when known.\n"
+            "- For each targeted change, quote one exact current line or short snippet from the file to anchor the edit.\n"
+            "- check_after_fix: 1-4 concrete validations.\n"
+            "- Include a compilation check in check_after_fix.\n"
+            "- Favor minimal edits over broad refactors.\n\n"
             f"{context}"
         )
         raw = self.llm.generate_response(
             prompt,
-            temperature=0.3,
+            temperature=0.25,
             system_prompt=self.SYSTEM_PROMPT,
             json_schema=self.DIAG_JSON_SCHEMA,
         ).strip()
-        return self._json_to_text(raw, failed_default)
-
-
+        return self._json_to_text(raw)
 
     @staticmethod
-    def _json_to_text(raw: str, failed_default: str) -> str:
+    def _json_to_text(raw: str) -> str:
         payload = json.loads(raw)
-        failed = str(payload.get("failed_tests", "")).strip() or failed_default
         root = str(payload.get("root_cause", "")).strip()
         targeted = "\n".join(str(x).strip() for x in payload.get("targeted_changes", []))
         checks = "\n".join(str(x).strip() for x in payload.get("check_after_fix", []))
         return (
-            f"FAILED_TESTS:\n{failed}\n\n"
             f"ROOT_CAUSE:\n{root}\n\n"
             f"TARGETED_CHANGES:\n{targeted}\n\n"
             f"CHECK_AFTER_FIX:\n{checks}"
+        )
+
+    @staticmethod
+    def _format_context_file(item: dict) -> str:
+        path = str(item.get("path", "")).strip()
+        content = str(item.get("content", ""))
+        return (
+            f"FILE: {path}\n"
+            "```java\n"
+            f"{content}\n"
+            "```"
         )

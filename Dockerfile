@@ -1,13 +1,10 @@
-FROM eclipse-temurin:17
+FROM maven:3.9.9-eclipse-temurin-17
 
 WORKDIR /app
 
-# Fix APT sources (force HTTPS)
-RUN sed -i 's|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list && \
-    sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g' /etc/apt/sources.list
-
-# Then install packages
-RUN apt-get update && apt-get install -y wget unzip
+# Runtime helpers used by the repo-based experiment scripts.
+RUN apt-get update && apt-get install -y --no-install-recommends git unzip wget && \
+    rm -rf /var/lib/apt/lists/*
 
 # JUnit 5 standalone runner
 RUN wget -q -O /app/junit.jar \
@@ -23,6 +20,8 @@ RUN wget -q -O /tmp/sonar-scanner.zip \
 ENV PATH="/opt/sonar-scanner/bin:${PATH}"
 
 COPY run_tests.sh /app/run_tests.sh
-RUN chmod +x /app/run_tests.sh
+COPY run_repo_tests.sh /app/run_repo_tests.sh
+COPY run_sonar_scan.sh /app/run_sonar_scan.sh
+RUN chmod +x /app/run_tests.sh /app/run_repo_tests.sh /app/run_sonar_scan.sh
 
-CMD ["bash"]
+CMD ["sleep", "infinity"]

@@ -1,9 +1,9 @@
 services:
   sonarqube:
     image: sonarqube:lts-community
-    container_name: sonarqube
+    container_name: sonarqube_container
     ports:
-      - "9000:9000"
+      - "9002:9000"
     volumes:
       - sonarqube_data:/opt/sonarqube/data
       - sonarqube_extensions:/opt/sonarqube/extensions
@@ -12,17 +12,18 @@ services:
 
   tester:
     build: .
-    container_name: java_tester
-    # Shared volume: host writes .java files here, container compiles+tests them
-    # Results are written back as JSON files the host reads
+    container_name: java_tester_container
     volumes:
       - ./workspace:/app/workspace
+      - ./cloned_repo:/app/cloned_repo
+      - maven_cache:/var/maven/.m2
     restart: unless-stopped
-    working_dir: /app/workspace
-    stdin_open: true
-    tty: true
+    working_dir: /app
+    depends_on:
+      - sonarqube
 
 volumes:
+  maven_cache:
   sonarqube_data:
   sonarqube_extensions:
   sonarqube_logs:

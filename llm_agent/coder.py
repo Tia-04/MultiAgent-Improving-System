@@ -1,35 +1,46 @@
 """
 llm_agent/coder.py
 ------------------
-CoderAgent: generates a Java implementation from a problem spec.
+CoderAgent: generates post-edit contents for a single Java file.
 """
 
 import json
-import re
 
 
 class CoderAgent:
-    # Stable behavioral policy (high level). Dynamic task details stay in user prompt.
     SYSTEM_PROMPT = (
-        "You are a Java coding agent.\n"
-        "Non-negotiable rules:\n"
-        "- Return only valid JSON matching the provided schema.\n"
-        "- The java_code field must contain a complete compilable Java file.\n"
-        "- Never add package declarations.\n"
-        "- Preserve the required class name and method signature exactly.\n"
-        "- On retries, apply minimal local edits only.\n"
-        "- Do not regress passed tests."
+        "You edit one Java file and return strict JSON only.\n"
+        "Return exactly one changed file with its full content.\n"
+        "The updated file must compile as valid Java.\n"
+        "Do not return diffs, markdown, or explanations."
     )
 
-    CODE_JSON_SCHEMA = {
-        "name": "java_solution",
+    AFTER_JSON_SCHEMA = {
+        "name": "single_file_edit",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "java_code": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                            },
+                            "content": {
+                                "type": "string",
+                            },
+                        },
+                        "required": ["file_name", "content"],
+                        "additionalProperties": False,
+                    },
+                    "minItems": 1,
+                    "maxItems": 1,
+                },
             },
-            "required": ["java_code"],
+            "required": ["files"],
             "additionalProperties": False,
         },
     }
@@ -37,112 +48,105 @@ class CoderAgent:
     def __init__(self, llm):
         self.llm = llm
 
-    def code_with_test(
+    def code_repo_files(
         self,
-        problem:       dict,
-        hints:         str | None = None,
-        previous_code: str | None = None,
+        context_file: dict,
+        hints: str | None = None,
     ) -> dict:
         """
-        Produce one Java candidate for the current problem attempt.
+        Produce full post-edit file contents for the repo-based experiment.
 
-        On retries, feed previous code + analyzer hints to request a minimal patch.
-        Returns dict: {"filename": <class_name>, "code": <java_source>}.
+        `context_file` should contain:
+          - path: repo-relative path
+          - content: full file content
         """
-        class_name  = problem["class_name"]
-        description = problem["description"]
-        signature   = problem["signature"]
+        target_path = str(context_file.get("path", "")).strip().replace("\\", "/")
+        original_content = str(context_file.get("content", ""))
+        if not target_path:
+            raise ValueError("Context file is missing 'path'.")
 
-        cleaned_previous_code = self._clean(previous_code) if previous_code else None
-        clean_hints = self._clean(hints) if hints else None
+        context_block = self._format_context_file(context_file)
+        hint_block = (hints or "").strip()
 
-        desc_block = description
+        prompt = f"""Generate the post-edit contents for one Java file.
 
-        if cleaned_previous_code and clean_hints:
-            retry_block = (
-                f"\nYour previous attempt failed:\n{cleaned_previous_code}\n\n"
-                "Repair using analyzer diagnosis below.\n"
-                "Treat TARGETED_CHANGES as required.\n"
-                "Treat CHECK_AFTER_FIX as acceptance criteria.\n\n"
-                f"{clean_hints}\n\n"
-                "Patch policy:\n"
-                "- Keep working logic unchanged.\n"
-                "- Edit only what is needed for failing tests/issues.\n"
-                "- Avoid rewrites and avoid new helpers unless necessary."
-            )
-        elif cleaned_previous_code:
-            retry_block = (
-                f"\nYour previous attempt failed:\n{cleaned_previous_code}\n\n"
-                "Repair with minimal changes only.\n"
-                "Preserve working logic and avoid full rewrites."
-            )
-        else:
-            retry_block = ""
+Return JSON only. Field: files (array)
 
-        prompt = f"""You generate Java code.
+Output example:
+{{
+  "files": [
+    {{
+      "file_name": "{target_path}",
+      "content": "full updated file text here"
+    }}
+  ]
+}}
 
-Return JSON only. Field:
-- java_code: valid complete single-file Java source
+Rules:
+- Return exactly one file: {target_path}
+- Each content value must be the complete updated file, not a fragment
+- Keep the edit minimal and behavior-preserving unless the hints require otherwise
+- Make sure the updated file compiles as valid Java
+- Do not invent changes outside the provided file
 
-Rules for java_code:
-- Complete compilable Java file
-- Class named exactly: {class_name}
-- No package declaration, no main method, no JUnit imports
-- All necessary imports at the top (java.util.* etc.)
-- No markdown, no explanations
+Repository context file:
+{context_block}
 
-IMPORTANT: Read the description carefully. Do NOT assume this is a problem
-you have seen before — the framing and constraints may differ from similar problems.
-
-When retrying, prefer a minimal patch over a rewrite.
-Do not break behavior that likely already passes tests.
-
-Problem description:
-{desc_block}
-
-Method signature to implement:
-{signature}
-{retry_block}
-"""
-        # note: codex client does not support temperature, this is for retrocompatibility with OllamaClient.
-        temperature = 0.4 if not cleaned_previous_code else 0.25
+Hints:
+{hint_block}"""
         response = self.llm.generate_response(
             prompt,
-            temperature=temperature,
-            json_schema=self.CODE_JSON_SCHEMA,
+            temperature=0.2,
+            json_schema=self.AFTER_JSON_SCHEMA,
             system_prompt=self.SYSTEM_PROMPT,
         )
-        code = self._extract_code_from_json(response)
-        code = self._strip_package(code)
-        return {"filename": class_name, "code": code}
+        edited_files = self._extract_files_from_json(response, target_path, original_content)
+        return {"filename": "candidate.files.json", "files": edited_files}
 
     @staticmethod
-    def _extract_code_from_json(text: str) -> str:
-        """Parse strict JSON model output and extract java_code field."""
+    def _extract_files_from_json(text: str, target_path: str, original_content: str) -> list[dict]:
+        """Parse strict JSON model output and extract validated files."""
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Model output is not valid JSON: {text[:500]}") from exc
 
-        code = payload.get("java_code", "")
-        if not isinstance(code, str):
-            raise ValueError("Model JSON does not contain string field 'java_code'.")
-        if not code:
-            raise ValueError("Field 'java_code' is empty.")
-        return code
+        files = payload.get("files")
+        if not isinstance(files, list):
+            raise ValueError("Model JSON does not contain array field 'files'.")
+        if len(files) != 1:
+            raise ValueError(f"Field 'files' must contain exactly one file, got {len(files)}.")
+
+        validated_files = []
+        for item in files:
+            if not isinstance(item, dict):
+                raise ValueError("Each files entry must be an object.")
+            path = str(item.get("file_name", "")).strip().replace("\\", "/")
+            content = item.get("content")
+            if not path:
+                raise ValueError("A file entry is missing 'file_name'.")
+            if path != target_path:
+                raise ValueError(f"Returned file does not match the provided target: {path}")
+            if not isinstance(content, str):
+                raise ValueError(f"File '{path}' is missing string field 'content'.")
+            if not content:
+                raise ValueError(f"File '{path}' has empty content.")
+            if content == original_content:
+                continue
+            validated_files.append({"path": path, "content": content})
+
+        if not validated_files:
+            raise ValueError("Model returned no actual file changes.")
+
+        return validated_files
 
     @staticmethod
-    def _strip_package(code: str) -> str:
-        """Defensive cleanup: remove package lines (tests expect default package)."""
-        return "\n".join(
-            line for line in code.splitlines()
-            if not (line.strip().startswith("package ") and line.strip().endswith(";"))
+    def _format_context_file(item: dict) -> str:
+        path = str(item.get("path", "")).strip()
+        content = str(item.get("content", ""))
+        return (
+            f"FILE: {path}\n"
+            "```java\n"
+            f"{content}\n"
+            "```"
         )
-
-    @staticmethod
-
-    def _clean(text: str) -> str:
-        """This method is needed because ''' java markdowns in response"""
-        text = re.sub(r'```(?:java)?\s*', '', text)
-        text = re.sub(r'```', '', text)
-        return text.strip()
