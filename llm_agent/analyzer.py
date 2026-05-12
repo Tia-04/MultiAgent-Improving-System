@@ -73,13 +73,11 @@ class AnalyzerAgent:
             )
         )
 
-    def analyze_test_failures(self, context_file: dict, test_output: str, baseline_failures: list[str]) -> str:
-        baseline_block = "\n".join(f"- {item}" for item in baseline_failures) or "none"
+    def analyze_test_failures(self, context_file: dict, test_output: str) -> str:
         return self._analyze(
             context=(
-                "Context: Tests got worse after editing this file.\n"
-                "Goal: restore the exact baseline failing-test set.\n"
-                f"BASELINE_FAILING_TESTS:\n{baseline_block}\n\n"
+                "Context: Tests failed after editing this file.\n"
+                "Goal: make every remaining enabled test pass.\n"
                 f"CURRENT_TEST_OUTPUT:\n{test_output}\n\n"
                 f"FILE:\n{self._format_context_file(context_file)}\n"
             )

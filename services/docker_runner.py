@@ -12,9 +12,9 @@ import subprocess
 
 class DockerRunner:
     JAVA_TESTER_CONTAINER = "java_tester_container"
-    TEST_TIMEOUT = 600
+    TEST_TIMEOUT = 1000
     COMPILE_TIMEOUT = 600
-    SONAR_TIMEOUT = 300
+    SONAR_TIMEOUT = 1000
     CONTAINER_WORKSPACE_ROOT = "/app/workspace"
     CONTAINER_CLONED_REPO_ROOT = "/app/cloned_repo"
 

@@ -71,7 +71,7 @@ class SonarService:
     def _wait_for_analysis(
         self,
         component: str | None = None,
-        timeout: int = 60,
+        timeout: int = 100,
         poll_interval: int = 3,
     ) -> None:
         """
@@ -252,7 +252,7 @@ class SonarService:
         if last_error:
             raise last_error
         return []
-
+    #TO REMOVE
     def get_issues_for_metric(
         self,
         metric: str,

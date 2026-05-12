@@ -19,9 +19,8 @@ RUN wget -q -O /tmp/sonar-scanner.zip \
 
 ENV PATH="/opt/sonar-scanner/bin:${PATH}"
 
-COPY run_tests.sh /app/run_tests.sh
 COPY run_repo_tests.sh /app/run_repo_tests.sh
 COPY run_sonar_scan.sh /app/run_sonar_scan.sh
-RUN chmod +x /app/run_tests.sh /app/run_repo_tests.sh /app/run_sonar_scan.sh
+RUN chmod +x /app/run_repo_tests.sh /app/run_sonar_scan.sh
 
 CMD ["sleep", "infinity"]
