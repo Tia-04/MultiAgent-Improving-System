@@ -118,51 +118,29 @@ class CodexClient:
     @staticmethod
     def _extract_text(data: dict) -> str:
         """
-        Extract assistant text across known Responses API payload variants.
-
-        Tries output_text first, then walks output/content blocks.
+        Extract assistant text from Responses API payload.
+        Compatible with GPT-5 Nano models.
         """
-        # Newer Responses API shape can include a top-level output_text string.
-        output_text = data.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            return output_text
 
-        # Some SDK/server variants return output_text as a list of text chunks.
-        if isinstance(output_text, list):
-            chunks = [c for c in output_text if isinstance(c, str) and c]
-            joined = "".join(chunks).strip()
-            if joined:
-                return joined
+        # Preferred fast path
+        text = data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
 
-        # Fallback: walk output blocks and collect text from recognized content types.
-        out = data.get("output", [])
-        collected = []
-        if isinstance(out, list):
-            for item in out:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content", [])
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    txt = block.get("text")
-                    if isinstance(txt, str):
-                        collected.append(txt)
-                        continue
-                    if block.get("type") in ("output_text", "text"):
-                        val = block.get("value")
-                        if isinstance(val, str):
-                            collected.append(val)
+        # GPT-5 Nano commonly returns text inside output[*].content[*].text
+        output = data.get("output", [])
 
-        joined = "".join(collected).strip()
-        if joined:
-            return joined
+        for item in output:
+            if item.get("type") != "message":
+                continue
 
-        snippet = str(data)[:500]
+            for content in item.get("content", []):
+                text = content.get("text")
+
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+
         raise RuntimeError(
-            "OpenAI response did not contain extractable text in output_text/output content. "
-            f"Payload snippet: {snippet}"
+            "OpenAI response did not contain extractable text. "
+            f"Payload snippet: {str(data)[:500]}"
         )
-

@@ -12,6 +12,7 @@ class CoderAgent:
         "You edit one Java file and return strict JSON only.\n"
         "Return exactly one changed file with its full content.\n"
         "The updated file must compile as valid Java.\n"
+        "The updated file must not break existing behavior unless the hints require otherwise.\n"
         "Do not return diffs, markdown, or explanations."
     )
 
@@ -21,26 +22,14 @@ class CoderAgent:
         "schema": {
             "type": "object",
             "properties": {
-                "files": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "file_name": {
-                                "type": "string",
-                            },
-                            "content": {
-                                "type": "string",
-                            },
-                        },
-                        "required": ["file_name", "content"],
-                        "additionalProperties": False,
-                    },
-                    "minItems": 1,
-                    "maxItems": 1,
+                "file_name": {
+                    "type": "string",
+                },
+                "content": {
+                    "type": "string",
                 },
             },
-            "required": ["files"],
+            "required": ["file_name", "content"],
             "additionalProperties": False,
         },
     }
@@ -48,7 +37,7 @@ class CoderAgent:
     def __init__(self, llm):
         self.llm = llm
 
-    def code_repo_files(
+    def code_repo_file(
         self,
         context_file: dict,
         hints: str | None = None,
@@ -70,24 +59,21 @@ class CoderAgent:
 
         prompt = f"""Generate the post-edit contents for one Java file.
 
-Return JSON only. Field: files (array)
+Return JSON only.
 
 Output example:
 {{
-  "files": [
-    {{
-      "file_name": "{target_path}",
-      "content": "full updated file text here"
-    }}
-  ]
+  "file_name": "{target_path}",
+  "content": "full updated file text here"
 }}
 
 Rules:
 - Return exactly one file: {target_path}
-- Each content value must be the complete updated file, not a fragment
+- The content value must be the complete updated file, not a fragment
 - Keep the edit minimal and behavior-preserving unless the hints require otherwise
 - Make sure the updated file compiles as valid Java
 - Do not invent changes outside the provided file
+- Maintain javadoc notation and comments unless the hints require otherwise
 
 Repository context file:
 {context_block}
@@ -100,45 +86,30 @@ Hints:
             json_schema=self.AFTER_JSON_SCHEMA,
             system_prompt=self.SYSTEM_PROMPT,
         )
-        edited_files = self._extract_files_from_json(response, target_path, original_content)
-        return {"filename": "candidate.files.json", "files": edited_files}
+        return self._extract_file_from_json(response, target_path, original_content)
 
     @staticmethod
-    def _extract_files_from_json(text: str, target_path: str, original_content: str) -> list[dict]:
-        """Parse strict JSON model output and extract validated files."""
+    def _extract_file_from_json(text: str, target_path: str, original_content: str) -> dict:
+        """Parse strict JSON model output and extract one validated file."""
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Model output is not valid JSON: {text[:500]}") from exc
 
-        files = payload.get("files")
-        if not isinstance(files, list):
-            raise ValueError("Model JSON does not contain array field 'files'.")
-        if len(files) != 1:
-            raise ValueError(f"Field 'files' must contain exactly one file, got {len(files)}.")
-
-        validated_files = []
-        for item in files:
-            if not isinstance(item, dict):
-                raise ValueError("Each files entry must be an object.")
-            path = str(item.get("file_name", "")).strip().replace("\\", "/")
-            content = item.get("content")
-            if not path:
-                raise ValueError("A file entry is missing 'file_name'.")
-            if path != target_path:
-                raise ValueError(f"Returned file does not match the provided target: {path}")
-            if not isinstance(content, str):
-                raise ValueError(f"File '{path}' is missing string field 'content'.")
-            if not content:
-                raise ValueError(f"File '{path}' has empty content.")
-            if content == original_content:
-                continue
-            validated_files.append({"path": path, "content": content})
-
-        if not validated_files:
+        path = str(payload.get("file_name", "")).strip().replace("\\", "/")
+        content = payload.get("content")
+        if not path:
+            raise ValueError("Model JSON is missing 'file_name'.")
+        if path != target_path:
+            raise ValueError(f"Returned file does not match the provided target: {path}")
+        if not isinstance(content, str):
+            raise ValueError(f"File '{path}' is missing string field 'content'.")
+        if not content:
+            raise ValueError(f"File '{path}' has empty content.")
+        if content == original_content:
             raise ValueError("Model returned no actual file changes.")
 
-        return validated_files
+        return {"path": path, "content": content}
 
     @staticmethod
     def _format_context_file(item: dict) -> str:

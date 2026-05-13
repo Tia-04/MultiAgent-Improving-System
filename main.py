@@ -4,11 +4,11 @@ main.py
 
 import sys
 
-from orchestrator.loop import run_normal_mode
+from orchestrator.loop import start_experiment
 
 
 def main(argv: list[str] | None = None):
-    run_normal_mode()
+    start_experiment()
 
 
 if __name__ == "__main__":

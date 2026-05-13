@@ -24,6 +24,8 @@ class DockerRunner:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout or self.TEST_TIMEOUT,
         )
 
@@ -108,10 +110,12 @@ class DockerRunner:
 
     @staticmethod
     def _log_process_output(proc: subprocess.CompletedProcess) -> None:
-        if proc.stdout.strip():
-            print(proc.stdout.strip())
-        if proc.stderr.strip():
-            print(f"  [docker stderr] {proc.stderr.strip()}")
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        if stdout:
+            print(stdout)
+        if stderr:
+            print(f"  [docker stderr] {stderr}")
 
     def _host_path_to_container_path(self, source_folder: str) -> str:
         abs_folder = os.path.abspath(source_folder)

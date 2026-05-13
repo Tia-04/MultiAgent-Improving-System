@@ -12,6 +12,7 @@ class AnalyzerAgent:
         "You analyze one Java file and return strict JSON only.\n"
         "Keep suggestions minimal, concrete, and limited to the provided file.\n"
         "Treat successful Java compilation as a hard requirement.\n"
+        "Do not suggest edits that introduce new bugs, new code smells, or higher cognitive complexity.\n"
         "Do not output code blocks."
     )
 
@@ -26,7 +27,7 @@ class AnalyzerAgent:
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 1,
-                    "maxItems": 4,
+                    "maxItems": 5,
                 },
                 "check_after_fix": {
                     "type": "array",
@@ -53,11 +54,12 @@ class AnalyzerAgent:
             (
                 f"- line={i.get('line', '?')} rule={i.get('rule', '?')} message={i.get('message', '?')}"
             )
-            for i in issues[:5]
+            for i in issues[:10]
         ) or "none"
         return self._analyze(
             context=(
                 "Context: Sonar quality did not meet the target and this file is being rewritten.\n"
+                "Goal: reduce the reported issues without introducing any new Sonar code smells or extra complexity.\n"
                 f"METRICS: {key_metrics}\n"
                 f"TOP ISSUES:\n{top_issues}\n\n"
                 f"FILE:\n{self._format_context_file(context_file)}\n"
@@ -88,12 +90,12 @@ class AnalyzerAgent:
             "Return JSON with fields: root_cause, targeted_changes, check_after_fix.\n"
             "Rules:\n"
             "- root_cause: 1-3 short sentences.\n"
-            "- targeted_changes: 1-4 short imperative actions for that file only.\n"
+            "- targeted_changes: 1-5 short imperative actions for that file only.\n"
             "- Make sure the proposed edit still compiles as valid Java.\n"
+            "- Do not propose edits that add new code smells, new duplication, or unnecessary branching.\n"
             "- For each targeted change, include the exact method name when known.\n"
             "- For each targeted change, quote one exact current line or short snippet from the file to anchor the edit.\n"
-            "- check_after_fix: 1-4 concrete validations.\n"
-            "- Include a compilation check in check_after_fix.\n"
+            "- check_after_fix: 1-5 concrete validations\n"
             "- Favor minimal edits over broad refactors.\n\n"
             f"{context}"
         )

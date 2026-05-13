@@ -57,27 +57,18 @@ class WorkspaceManager:
         print(f"  [workspace] copied {previous} -> {current}")
         return current
 
-    def write_json_artifact(self, payload: dict | list, iteration: int, filename: str = "changes.json") -> str:
-        folder = self.iteration_path(iteration)
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, filename)
-        with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-        print(f"  [workspace] wrote artifact {path}")
-        return path
 
-    def apply_files(self, edited_files: list[dict], iteration: int) -> str:
+    def apply_file(self, edited_file: dict, iteration: int) -> str:
         folder = self.create_iteration_from_previous(iteration)
         root = Path(folder)
-        for item in edited_files:
-            rel_path = str(item.get("path", "")).replace("\\", "/")
-            content = item.get("content")
-            if not rel_path or not isinstance(content, str):
-                raise RuntimeError(f"Invalid edited file payload: {item}")
-            target_path = root / rel_path
-            if not target_path.is_file():
-                raise RuntimeError(f"Cannot overwrite missing file: {rel_path}")
-            target_path.write_text(content, encoding="utf-8", newline="\n")
+        rel_path = str(edited_file.get("path", "")).replace("\\", "/")
+        content = edited_file.get("content")
+        if not rel_path or not isinstance(content, str):
+            raise RuntimeError(f"Invalid edited file payload: {edited_file}")
+        target_path = root / rel_path
+        if not target_path.is_file():
+            raise RuntimeError(f"Cannot overwrite missing file: {rel_path}")
+        target_path.write_text(content, encoding="utf-8", newline="\n")
         print(f"  [workspace] applied file updates in {folder}")
         return folder
 

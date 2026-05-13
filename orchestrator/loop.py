@@ -50,13 +50,10 @@ def build_components(repo_path=None):
     )
 
 
-def run_normal_mode(args=None):
+def start_experiment():
     result = build_components(DEFAULT_REPO_PATH).run()
     _save_result(result)
     return result
-
-
-run_future_mode = run_normal_mode
 
 
 def _save_result(result, output_path="results.json"):
@@ -135,31 +132,27 @@ class EvaluationLoop:
                         hints = self.analyzer.analyze_test_failures(current_file, "\n".join(prev.get("failures", [])[:20]))
 
                     try:
-                        gen = self.coder.code_repo_files(context_file=current_file, hints=hints)
-                        self.workspace.apply_files(gen["files"], iteration)
+                        edited_file = self.coder.code_repo_file(context_file=current_file, hints=hints)
+                        self.workspace.apply_file(edited_file, iteration)
                     except (ValueError, RuntimeError) as exc:
                         log["attempts"].append({"retry": retry + 1, "error": str(exc)})
                         print(f"  [file] {rel_path} -> coder error on retry {retry + 1}: {exc}")
                         continue
 
-                    compile_result = self._parse_maven(
-                        self.workspace.iteration_path(iteration),
-                        self.runner.run_repo_compile_for_iteration(iteration, self.workspace),
-                    )
-                    if not compile_result["compile_ok"]:
-                        log["attempts"].append({"retry": retry + 1, "compile_ok": False, "compile_errors": compile_result["compile_errors"]})
-                        print(f"  [file] {rel_path} -> compile failed (retry {retry + 1})")
-                        continue
-
-                    test_result = self._parse_maven(
+                    maven_result = self._parse_maven(
                         self.workspace.iteration_path(iteration),
                         self.runner.run_repo_tests_for_iteration(iteration, self.workspace),
                     )
-                    failures = test_result.get("failures_with_values", [])
-                    tests_failed = test_result.get("tests_failed", 0)
-                    if tests_failed > 0 or not test_result.get("compile_ok"):
+                    if not maven_result["compile_ok"]:
+                        log["attempts"].append({"retry": retry + 1, "compile_ok": False, "compile_errors": maven_result["compile_errors"]})
+                        print(f"  [file] {rel_path} -> compile failed (retry {retry + 1})")
+                        continue
+
+                    failures = maven_result.get("failures_with_values", [])
+                    tests_failed = maven_result.get("tests_failed", 0)
+                    if tests_failed > 0:
                         log["attempts"].append({"retry": retry + 1, "compile_ok": True, "tests_failed": tests_failed, "failures": failures})
-                        print(f"  [file] {rel_path} -> {len(failures)} tests failed (retry {retry + 1})")
+                        print(f"  [file] {rel_path} -> {tests_failed} tests failed (retry {retry + 1})")
                         continue
 
                     accepted = True
